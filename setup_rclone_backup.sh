@@ -1,17 +1,16 @@
 #!/bin/bash
 
 # ==============================================================================
-# Rclone保姆级一站式备份脚本 (God Mode Edition)
+# Rclone保姆级一站式备份脚本 (God Mode Plus Edition)
 #
-# 作者: Your Name/GitHub
-# 版本: 2.0
+# 作者: Your Name/GitHub (基于原版修改)
+# 版本: 3.0
 #
-# 功能:
-# 1. 自动安装 Rclone 及依赖。
-# 2. 提供主流网盘 (Google Drive, OneDrive, Dropbox) 的选择。
-# 3. 在配置环节前, 提供清晰、详细的步骤指导, 解决 "API配置" 难题。
-# 4. 全自动创建和管理定时备份任务 (Cron Job)。
-# 5. 提供强大的后期管理菜单。
+# 新增功能 (v3.0):
+# 1. 新增 "压缩后上传" 模式, 将目录打包为 .tar.gz 文件上传。
+# 2. 新增备份保留策略, 自动删除网盘中旧的备份文件 (仅压缩模式)。
+# 3. 新增自定义 Cron 表达式, 实现任意时间频率的备份。
+# 4. 新增日志文件自动清理, 防止日志文件过大。
 #
 # 使用方法:
 # 1. 保存为 rclone_god_mode.sh
@@ -29,11 +28,15 @@ NC='\033[0m'
 CONFIG_FILE="/etc/rclone_backup.conf"
 LOG_FILE="/var/log/rclone_backup.log"
 CRON_COMMENT_TAG="Rclone-Backup-Job-by-GodMode-Script"
+TMP_DIR="/tmp"
+LOG_RETENTION_LINES=5000 # 日志文件保留的最大行数
 
 # --- 基础函数 ---
-log_info() { echo -e "${GREEN}[信息] $1${NC}"; }
-log_warn() { echo -e "${YELLOW}[警告] $1${NC}"; }
-log_error() { echo -e "${RED}[错误] $1${NC}"; }
+log_info() { echo -e "${GREEN}[信息] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}" >> "$LOG_FILE"; echo -e "${GREEN}[信息] $1${NC}"; }
+log_warn() { echo -e "${YELLOW}[警告] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}" >> "$LOG_FILE"; echo -e "${YELLOW}[警告] $1${NC}"; }
+log_error() { echo -e "${RED}[错误] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}" >> "$LOG_FILE"; echo -e "${RED}[错误] $1${NC}"; }
+log_to_file() { echo "$(date +"%Y-%m-%d %H:%M:%S") $1" >> "$LOG_FILE"; }
+
 press_any_key() {
     echo -e "\n${BLUE}按任意键继续...${NC}"
     read -n 1 -s
@@ -41,7 +44,7 @@ press_any_key() {
 
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
-       log_error "此脚本需要以 root 用户身份运行。请使用 'sudo ./rclone_god_mode.sh'。"
+       echo -e "${RED}[错误] 此脚本需要以 root 用户身份运行。请使用 'sudo ./rclone_god_mode.sh'。${NC}"
        exit 1
     fi
 }
@@ -49,31 +52,34 @@ check_root() {
 # --- 安装与配置核心函数 ---
 
 install_dependencies_and_rclone() {
-    log_info "正在检查并安装 Rclone 及依赖 (curl, unzip, fuse3)..."
+    echo -e "${GREEN}[信息] 正在检查并安装 Rclone 及依赖 (curl, unzip, fuse3)...${NC}"
     if ! command -v rclone &> /dev/null; then
         if command -v apt-get &> /dev/null; then
             apt-get update -y >/dev/null && apt-get install -y curl unzip fuse3 >/dev/null
         elif command -v yum &> /dev/null; then
             yum install -y curl unzip fuse3 >/dev/null
         else
-            log_error "未找到 apt 或 yum。请手动安装 'curl', 'unzip', 'fuse3'。"
+            echo -e "${RED}[错误] 未找到 apt 或 yum。请手动安装 'curl', 'unzip', 'fuse3'。${NC}"
             exit 1
         fi
         
         # 安装 Rclone
         curl -s https://rclone.org/install.sh | sudo bash
         if ! command -v rclone &>/dev/null; then
-            log_error "Rclone 安装失败。请访问官网手动安装。"
+            echo -e "${RED}[错误] Rclone 安装失败。请访问官网手动安装。${NC}"
             exit 1
         fi
-        log_info "Rclone 安装成功！版本: $(rclone --version | head -n 1)"
+        echo -e "${GREEN}[信息] Rclone 安装成功！版本: $(rclone --version | head -n 1)${NC}"
     else
-        log_info "Rclone 已安装。版本: $(rclone --version | head -n 1)"
+        echo -e "${GREEN}[信息] Rclone 已安装。版本: $(rclone --version | head -n 1)${NC}"
     fi
+    # 确保日志文件存在且可写
+    touch "$LOG_FILE" && chmod 644 "$LOG_FILE"
 }
 
-# 关键函数：分步指导用户配置 Rclone 远程
 configure_rclone_remote() {
+    # ... 此函数与原版相同，为简洁省略 ...
+    # (如果需要，将原版脚本中的 configure_rclone_remote 函数完整复制到这里)
     local remote_name=$1
     
     if rclone listremotes | grep -q "${remote_name}:"; then
@@ -137,7 +143,7 @@ configure_rclone_remote() {
             press_any_key
             rclone config --config "$HOME/.config/rclone/rclone.conf"
             ;;
-        *) 
+        *)
             log_error "无效选项，退出。"; exit 1 ;;
     esac
 
@@ -150,11 +156,10 @@ configure_rclone_remote() {
     fi
 }
 
-# 设置备份的主流程
 setup_backup_task() {
     echo -e "\n--- ${YELLOW}第一步：设置备份基础信息${NC} ---"
     read -p "请为您要连接的网盘起个别名 (纯英文, 例如 'gdrive'): " RCLONE_REMOTE_NAME
-    [ -z "$RCLONE_REMOTE_NAME" ] && { log_error "远程别名不能为空！"; exit 1; }
+    [ -z "$RCLONE_REMOTE_NAME" ] && { echo -e "${RED}错误：远程别名不能为空！${NC}"; exit 1; }
 
     read -p "请输入要备份的【本地目录】绝对路径 (例如 /var/www): " SOURCE_DIR
     if [ ! -d "$SOURCE_DIR" ]; then
@@ -164,30 +169,51 @@ setup_backup_task() {
     SOURCE_DIR=$(realpath "$SOURCE_DIR")
 
     read -p "请输入备份文件存放在网盘上的【文件夹路径】(例如 vps_backup/site1): " DEST_DIR
-    [ -z "$DEST_DIR" ] && { log_error "目标文件夹不能为空！"; exit 1; }
+    [ -z "$DEST_DIR" ] && { echo -e "${RED}错误：目标文件夹不能为空！${NC}"; exit 1; }
 
     # 调用配置向导
     configure_rclone_remote "$RCLONE_REMOTE_NAME"
 
-    echo -e "\n--- ${YELLOW}第二步：设置自动备份频率${NC} ---"
+    echo -e "\n--- ${YELLOW}第二步：选择备份模式${NC} ---"
+    echo "  1) 同步模式 (Sync): 保持本地和远程目录结构完全一致。"
+    echo "  2) 压缩模式 (Compress): 将本地目录打包成单个.tar.gz压缩文件后上传。"
+    read -p "请选择备份模式 [1-2, 默认 1]: " backup_choice
+    BACKUP_TYPE="sync"
+    RETENTION_COUNT=0
+    if [ "$backup_choice" == "2" ]; then
+        BACKUP_TYPE="compress"
+        read -p "请设置在网盘中保留的最新备份数量 (默认 25): " count
+        RETENTION_COUNT=${count:-25}
+    fi
+
+    echo -e "\n--- ${YELLOW}第三步：设置自动备份频率${NC} ---"
     echo "  1) 每天凌晨 3:00"
     echo "  2) 每周日凌晨 4:00"
     echo "  3) 每月1号凌晨 5:00"
     echo "  4) 每小时的第15分钟"
-    read -p "请选择备份频率 [1-4]: " cron_choice
+    echo "  5) ${BLUE}自定义 (输入您自己的 Cron 表达式)${NC}"
+    read -p "请选择备份频率 [1-5]: " cron_choice
 
     case $cron_choice in
         1) cron_schedule="0 3 * * *";;
         2) cron_schedule="0 4 * * 0";;
         3) cron_schedule="0 5 1 * *";;
         4) cron_schedule="15 * * * *";;
-        *) log_error "无效选项，退出。"; exit 1;;
+        5)
+            echo -e "${YELLOW}Cron 表达式格式: 分 时 日 月 周 (例如 '0 2 * * 1' 表示每周一凌晨2点)${NC}"
+            echo -e "${YELLOW}您可以使用 ${BLUE}https://crontab.guru/${NC} 来生成表达式。${NC}"
+            read -p "请输入您的 Cron 表达式: " cron_schedule
+            [ -z "$cron_schedule" ] && { echo -e "${RED}错误：Cron 表达式不能为空！${NC}"; exit 1; }
+            ;;
+        *) echo -e "${RED}错误：无效选项，退出。${NC}"; exit 1;;
     esac
 
     # 保存配置到文件
     echo "RCLONE_REMOTE_NAME='${RCLONE_REMOTE_NAME}'" > "$CONFIG_FILE"
     echo "SOURCE_DIR='${SOURCE_DIR}'" >> "$CONFIG_FILE"
     echo "DEST_DIR='${DEST_DIR}'" >> "$CONFIG_FILE"
+    echo "BACKUP_TYPE='${BACKUP_TYPE}'" >> "$CONFIG_FILE"
+    echo "RETENTION_COUNT='${RETENTION_COUNT}'" >> "$CONFIG_FILE"
     echo "CRON_SCHEDULE='${cron_schedule}'" >> "$CONFIG_FILE"
     chmod 600 "$CONFIG_FILE"
 
@@ -200,7 +226,7 @@ setup_backup_task() {
     log_info "您可以随时再次运行此脚本进入管理菜单。"
 }
 
-# --- 管理功能 ---
+# --- 核心备份与管理功能 ---
 
 load_config() {
     [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE" && return 0 || return 1
@@ -208,32 +234,106 @@ load_config() {
 
 update_cron_job() {
     load_config
-    rclone_command="rclone sync \"${SOURCE_DIR}\" \"${RCLONE_REMOTE_NAME}:${DEST_DIR}\" --log-file=${LOG_FILE} -v"
-    cron_job="${CRON_SCHEDULE} ${rclone_command}"
+    # 让cron直接调用本脚本的--run-task参数，更整洁、更强大
+    local script_path=$(realpath "$0")
+    local cron_job="${CRON_SCHEDULE} ${script_path} --run-task"
+    
     (crontab -l 2>/dev/null | grep -v "$CRON_COMMENT_TAG"; echo "# ${CRON_COMMENT_TAG}"; echo "$cron_job") | crontab -
     log_info "定时任务已成功创建/更新。"
 }
 
 print_current_config() {
-    if ! load_config; then log_warn "尚未配置备份任务。"; return; fi
+    if ! load_config; then echo -e "${YELLOW}[警告] 尚未配置备份任务。${NC}"; return; fi
     echo -e "--- ${YELLOW}当前备份配置详情${NC} ---"
-    echo -e "  - 本地源目录: ${BLUE}$SOURCE_DIR${NC}"
-    echo -e "  - 远程目标:    ${BLUE}${RCLONE_REMOTE_NAME}:${DEST_DIR}${NC}"
-    echo -e "  - 执行计划:    ${BLUE}$CRON_SCHEDULE${NC}"
-    echo -e "  - 日志文件:    ${BLUE}$LOG_FILE${NC}"
+    echo -e "  - 本地源目录:   ${BLUE}$SOURCE_DIR${NC}"
+    echo -e "  - 远程目标:     ${BLUE}${RCLONE_REMOTE_NAME}:${DEST_DIR}${NC}"
+    echo -e "  - 执行计划:     ${BLUE}$CRON_SCHEDULE${NC}"
+    echo -e "  - 备份模式:     ${BLUE}${BACKUP_TYPE}${NC}"
+    if [ "$BACKUP_TYPE" == "compress" ]; then
+    echo -e "  - 保留版本数:   ${BLUE}${RETENTION_COUNT}${NC}"
+    fi
+    echo -e "  - 日志文件:     ${BLUE}$LOG_FILE${NC}"
     echo "-------------------------"
+}
+
+# 【新】日志清理函数
+trim_log_file() {
+    log_to_file "开始清理日志文件，仅保留最近 ${LOG_RETENTION_LINES} 行..."
+    tail -n "${LOG_RETENTION_LINES}" "${LOG_FILE}" > "${LOG_FILE}.tmp"
+    mv "${LOG_FILE}.tmp" "${LOG_FILE}"
+    log_to_file "日志文件清理完毕。"
+}
+
+# 【重构】核心备份执行函数
+run_backup_core() {
+    if ! load_config; then log_error "无法加载配置文件，备份中止。"; exit 1; fi
+    
+    local show_progress=$1 # 接收 --progress 参数
+
+    log_info "开始执行备份任务，模式: ${BACKUP_TYPE}"
+
+    if [ "$BACKUP_TYPE" == "sync" ]; then
+        # 同步模式
+        log_to_file "执行 rclone sync 从 ${SOURCE_DIR} 到 ${RCLONE_REMOTE_NAME}:${DEST_DIR}"
+        rclone sync "${SOURCE_DIR}" "${RCLONE_REMOTE_NAME}:${DEST_DIR}" -v ${show_progress} >> "$LOG_FILE" 2>&1
+        local rclone_exit_code=$?
+        if [ $rclone_exit_code -eq 0 ]; then
+            log_info "同步模式备份成功。"
+        else
+            log_error "同步模式备份失败！Rclone退出码: ${rclone_exit_code}"
+        fi
+    else
+        # 压缩模式
+        local archive_basename="${SOURCE_DIR##*/}_$(date +%Y%m%d_%H%M%S).tar.gz"
+        local temp_archive_path="${TMP_DIR}/${archive_basename}"
+        
+        log_to_file "创建临时压缩文件: ${temp_archive_path}"
+        tar -czf "${temp_archive_path}" -C "$(dirname "${SOURCE_DIR}")" "$(basename "${SOURCE_DIR}")"
+        
+        if [ -f "${temp_archive_path}" ]; then
+            log_to_file "压缩成功，开始上传到 ${RCLONE_REMOTE_NAME}:${DEST_DIR}/${archive_basename}"
+            rclone copyto "${temp_archive_path}" "${RCLONE_REMOTE_NAME}:${DEST_DIR}/${archive_basename}" -v ${show_progress} >> "$LOG_FILE" 2>&1
+            local rclone_exit_code=$?
+
+            log_to_file "删除本地临时压缩文件: ${temp_archive_path}"
+            rm -f "${temp_archive_path}"
+
+            if [ $rclone_exit_code -eq 0 ]; then
+                log_info "压缩备份文件上传成功。"
+                # --- 删除旧备份 ---
+                if [ "$RETENTION_COUNT" -gt 0 ]; then
+                    log_to_file "开始清理旧备份，保留最近 ${RETENTION_COUNT} 个文件。"
+                    # 列出所有备份文件，按时间倒序，跳过最新的 n 个，然后删除其余的
+                    rclone lsf "${RCLONE_REMOTE_NAME}:${DEST_DIR}" | sort -r | tail -n +$((RETENTION_COUNT + 1)) | while read -r file_to_delete; do
+                        if [ -n "$file_to_delete" ]; then
+                            log_to_file "删除旧备份: ${file_to_delete}"
+                            rclone delete "${RCLONE_REMOTE_NAME}:${DEST_DIR}/${file_to_delete}" -v >> "$LOG_FILE" 2>&1
+                        fi
+                    done
+                    log_to_file "旧备份清理完毕。"
+                fi
+            else
+                log_error "压缩备份文件上传失败！Rclone退出码: ${rclone_exit_code}"
+            fi
+        else
+            log_error "创建压缩文件失败！路径: ${temp_archive_path}"
+        fi
+    fi
+    
+    # 每次备份后都清理日志
+    trim_log_file
 }
 
 run_backup_manually() {
     if ! load_config; then log_error "无配置，请先初始化。"; return; fi
     log_info "开始手动执行一次备份 (带进度条)..."
-    rclone sync "${SOURCE_DIR}" "${RCLONE_REMOTE_NAME}:${DEST_DIR}" --log-file=${LOG_FILE} -v --progress
+    run_backup_core "--progress"
     log_info "手动备份完成。详情请见日志: ${LOG_FILE}"
 }
 
 view_log() {
     if [ -f "$LOG_FILE" ]; then
-        log_info "显示最近50条日志 (按 'q' 退出):"
+        echo -e "${GREEN}显示最近50条日志 (按 'q' 退出):${NC}"
         tail -n 50 "$LOG_FILE" | less
     else
         log_warn "日志文件不存在，可能还未执行过备份。"
@@ -258,6 +358,12 @@ uninstall_backup() {
 
 # --- 主程序入口与菜单 ---
 main() {
+    # 检查是否由cron任务调用
+    if [[ "$1" == "--run-task" ]]; then
+        run_backup_core
+        exit 0
+    fi
+
     check_root
     
     if [ ! -f "$CONFIG_FILE" ]; then
@@ -269,7 +375,7 @@ main() {
         while true; do
             clear
             print_current_config
-            echo -e "--- ${GREEN}Rclone 备份管理菜单${NC} ---"
+            echo -e "--- ${GREEN}Rclone 备份管理菜单 (Plus)${NC} ---"
             echo "  1) 手动执行一次备份"
             echo "  2) 查看备份日志 (最近50条)"
             echo "  3) 【重置】所有备份配置"
@@ -283,11 +389,11 @@ main() {
                 3) log_warn "将引导您重新设置所有参数..."; setup_backup_task ;;
                 4) uninstall_backup; exit 0 ;;
                 q|Q) break ;;
-                *) log_error "无效输入，请重试。" ;;
+                *) echo -e "${RED}无效输入，请重试。${NC}"; press_any_key ;;
             esac
         done
     fi
-    log_info "脚本执行完毕，感谢使用！"
+    echo -e "${GREEN}脚本执行完毕，感谢使用！${NC}"
 }
 
 # --- 运行主程序 ---
