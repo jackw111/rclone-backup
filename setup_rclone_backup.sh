@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # ==============================================================================
-# Rclone 备份管理面板 (V9.0 "Final Boss" Edition)
+# Rclone 备份管理面板 (V10.0 "User-Corrected" Final Edition)
 #
 # 作者: Your Name/GitHub (基于用户反馈迭代)
-# 版本: 9.0
+# 版本: 10.0
 # 更新日志:
-# v9.0: 彻底重写 "保姆级" 向导，适配新版 Rclone 的 `rclone authorize` 远程授权流程。
-#       向导现在分为 "服务器" 和 "个人电脑" 两个阶段，并提供了个人电脑上
-#       下载和使用 Rclone 的详细步骤，解决了最复杂、最劝退的授权环节。
-# v8.0: 详细解释了 scope, service_account 等中间步骤。
-# v7.1: 修正了服务器用户在 'Use auto config?' 步骤中应选择 'n' 的关键问题。
+# v10.0: 根据用户的宝贵反馈，彻底重写并修正了 "配置网盘" 向导。
+#        详细加入了在个人电脑上创建“空壳”配置、获取 Token、
+#        以及在服务器上最后两步确认的完整流程。
+#        这应该是目前最详尽、最准确的远程授权中文指南。
+# v9.0:  重写向导，适配 `rclone authorize` 流程，但存在致命缺陷。
 # ==============================================================================
 
 # --- 全局变量和美化输出 ---
@@ -132,58 +132,62 @@ install_or_update_rclone() {
 
 wizard_configure_remote() {
     clear
-    echo -e "${GREEN}--- Rclone 网盘配置【V9.0 终极版】中文向导 ---${NC}"
-    echo
-    echo -e "本向导将带您走完新版 Rclone 最复杂的远程授权流程。请务必仔细阅读！"
-    echo -e "------------------------------------------------------------"
-    echo -e "${YELLOW}前序步骤 (1-7)，与之前类似，快速过一遍：${NC}"
+    echo -e "${GREEN}--- Rclone 网盘配置向导【V10.0 终极修正版】 ---${NC}"
+    echo -e "本向导已根据您的反馈彻底修正，请严格按照以下【四阶段】流程操作。"
+    echo -e "====================================================================="
+    echo -e "${BLUE}阶段一: 在【服务器】上开始配置 (当前SSH窗口)${NC}"
+    echo -e "---------------------------------------------------------------------"
     echo -e "   1. 'n/s/q>'             -> 输入 ${BLUE}n${NC} (新建)"
-    echo -e "   2. 'name>'               -> 输入一个英文名, 如 ${BLUE}gdrive${NC}"
+    echo -e "   2. 'name>'               -> 输入一个英文名, 如 ${BLUE}gdrive${NC} (这个名字很重要，后面要用)"
     echo -e "   3. 'Storage>'           -> 找到云盘 (如Google Drive) 输入其【数字】"
     echo -e "   4. 'client_id>'         -> 直接【回车】"
     echo -e "   5. 'client_secret>'     -> 直接【回车】"
     echo -e "   6. 'scope>'              -> 直接【回车】 (选择默认的完全权限)"
-    echo -e "   7. 'Edit advanced config?' -> 直接【回车】 (选择 n, 不编辑高级选项)"
+    echo -e "   7. 'Edit advanced config?' -> 直接【回车】 (选择 n)"
+    echo -e "   8. 'Use auto config?'      -> ${RED}关键步骤:${NC} 输入 ${BLUE}n${NC} 并回车 (因为服务器没有图形界面)"
     echo
-    echo -e "${YELLOW}【关键步骤】远程授权 (需要服务器和您自己的电脑配合)${NC}"
-    echo -e "------------------------------------------------------------"
-    echo -e "${BLUE}阶段一：在【服务器】上（当前 SSH 窗口）${NC}"
-    echo -e "   - 提示: 'Use auto config?' (y/n)"
-    echo -e "   - 操作: 输入 ${BLUE}n${NC} 并回车。"
+    echo -e "   ${YELLOW}==> 服务器会显示一串指令，并停在 'config_token>' 等待您输入。${NC}"
+    echo -e "   ${YELLOW}==> ${RED}不要动这个SSH窗口！${NC} 把它放一边，开始第二阶段操作。${NC}"
+    echo -e "====================================================================="
+    echo -e "${BLUE}阶段二: 在【您自己的电脑】上获取授权码 (Token)${NC}"
+    echo -e "---------------------------------------------------------------------"
+    echo -e "   1. 【下载Rclone】: 在您电脑浏览器访问 ${YELLOW}https://rclone.org/downloads/${NC} 下载对应版本"
+    echo -e "      (如 'Windows (64 bit)' 版)，解压到任意位置 (如 C:\\rclone)。"
     echo
-    echo -e "   - ${RED}重要！${NC} 接下来服务器会卡住，并显示如下提示:"
-    echo -e "     'Execute the following on the machine with the web browser:'"
-    echo -e "     '        rclone authorize \"drive\"'"
-    echo -e "     'Then paste the result.'"
-    echo -e "     'config_token>'"
-    echo -e "   - 操作: ${RED}看到这个提示后，不要动这个SSH窗口！把它放在一边，进行第二阶段操作。${NC}"
-    echo -e "------------------------------------------------------------"
-    echo -e "${BLUE}阶段二：在【您自己的电脑】上（例如 Windows/Mac）${NC}"
-    echo -e "   1. 【下载】: 在您的电脑浏览器访问 ${YELLOW}https://rclone.org/downloads/${NC} 下载 Rclone。"
-    echo -e "      (例如下载 'Windows (64 bit)' 版，并解压到 C:\\rclone)"
+    echo -e "   2. 【打开命令行】: 在您自己的电脑上打开命令行 (Windows是CMD或PowerShell)。"
+    echo -e "      进入解压目录, 例如: ${BLUE}cd C:\\rclone${NC}"
     echo
-    echo -e "   2. 【打开命令行】: 在您自己的电脑上打开一个命令行工具（Windows是CMD或PowerShell）。"
-    echo -e "      (例如，进入您解压的目录: cd C:\\rclone)"
+    echo -e "   3. 【创建'空壳'配置】: 在您电脑的命令行里运行 ${BLUE}rclone config${NC}，然后： "
+    echo -e "      - 'n/s/q>':              输入 ${BLUE}n${NC}"
+    echo -e "      - 'name>':               输入和服务器上【完全一样】的名字, 如 ${BLUE}gdrive${NC}"
+    echo -e "      - 'Storage>':            再次选择同样的网盘 (如Google Drive的数字)"
+    echo -e "      - 'client_id' 等后续问题: 全部【直接回车】"
+    echo -e "      - 'Use auto config?':    ${RED}关键步骤:${NC} 输入 ${BLUE}y${NC} (或直接回车), 这会在您电脑上打开浏览器。"
     echo
-    echo -e "   3. 【运行命令】: 在您电脑的命令行里，输入并执行服务器上提示的那句命令："
-    echo -e "      比如: ${BLUE}rclone authorize \"gdrive\"${NC} (注意名字要和您第2步起的一致)"
+    echo -e "   4. 【浏览器授权】: 在弹出的浏览器窗口中，登录您的网盘账户并同意授权。"
     echo
-    echo -e "   4. 【浏览器授权】: 上一步会自动打开浏览器，要求您登录网盘并授权，请照做。"
+    echo -e "   5. 【获取Token】: 授权成功后..."
+    echo -e "      - 回到您电脑的命令行窗口，按 ${BLUE}Ctrl + C${NC} 强制中断配置。"
+    echo -e "      - 然后运行命令: ${BLUE}rclone config dump${NC}"
+    echo -e "      - 在输出中找到 [gdrive] 部分，复制 ${YELLOW}token${NC} 后面那一长串被 ${BLUE}{}${NC} 包围的内容。"
+    echo -e "        ${YELLOW}示例: 复制 \"token\":\"{...一长串内容...}\" 中，从 { 开始到 } 结束的所有字符。${NC}"
+    echo -e "====================================================================="
+    echo -e "${BLUE}阶段三: 回到【服务器】上粘贴 Token (回到SSH窗口)${NC}"
+    echo -e "---------------------------------------------------------------------"
+    echo -e "   - 在光标闪烁的 'config_token>' 后面，【粘贴】您刚复制的全部内容，然后【回车】。"
+    echo -e "====================================================================="
+    echo -e "${BLUE}阶段四: 在【服务器】上完成最后确认${NC}"
+    echo -e "---------------------------------------------------------------------"
+    echo -e "   - 提示: 'Configure this as a Shared Drive (Team Drive)?'"
+    echo -e "     操作: 如果是个人盘，直接【回车】 (选择 n)。"
     echo
-    echo -e "   5. 【复制Token】: 授权后，切回您电脑的命令行窗口，会看到一长串被 {} 包起来的文本。"
-    echo -e "      ${YELLOW}将这一整段文本（从 { 开始到 } 结束）完整复制下来。${NC}"
-    echo -e "------------------------------------------------------------"
-    echo -e "${BLUE}阶段三：回到【服务器】上（回到 SSH 窗口）${NC}"
-    echo -e "   - 操作: 在光标闪烁的 'config_token>' 后面，【粘贴】您刚刚从自己电脑上复制的全部内容。"
-    echo -e "   - 操作: 按下【回车】。"
-    echo -e "------------------------------------------------------------"
-    echo -e "${YELLOW}收尾步骤 (10-12)${NC}"
-    echo -e "   10. 'Configure this as a team drive?' -> 如果是个人盘，直接【回车】 (选n)"
-    echo -e "   11. 'Yes this is OK?'                   -> 输入 ${BLUE}y${NC} (确认配置)"
-    echo -e "   12. 'n/s/q>'                          -> 输入 ${BLUE}q${NC} (退出)"
-    echo -e "------------------------------------------------------------"
+    echo -e "   - 提示: 'Keep this \"gdrive\" remote?'"
+    echo -e "     操作: 直接【回车】 (选择 y, 保存配置)。"
     echo
-    read -n 1 -s -r -p "说明阅读完毕，按任意键开始进入 Rclone 英文配置界面..."
+    echo -e "   - 最后会回到主菜单 'e/n/d/r/c/s/q>'"
+    echo -e "     操作: 输入 ${BLUE}q${NC} 并【回车】，退出配置程序。"
+    echo -e "====================================================================="
+    read -n 1 -s -r -p "说明已熟读，按任意键开始进入 Rclone 英文配置界面..."
     
     rclone config
     
@@ -226,7 +230,7 @@ setup_backup_task() {
     log_info "正在将配置写入 $CONFIG_FILE ..."
     cat > "$CONFIG_FILE" << EOF
 # Rclone Backup Configuration File
-# Generated by Panel Script V9.0
+# Generated by Panel Script V10.0
 
 # 本地备份源目录
 LOCAL_PATH="$LOCAL_PATH"
@@ -305,7 +309,7 @@ view_current_config() {
     (
         echo -e "配置项\t值"
         echo -e "-------\t---"
-        grep -v '^#' "$CONFIG_RILE" | sed 's/=/ \t/' | sed 's/"//g'
+        grep -v '^#' "$CONFIG_FILE" | sed 's/=/ \t/' | sed 's/"//g'
     ) | column -t -s $'\t'
 }
 
@@ -376,12 +380,12 @@ show_menu() {
     
     clear
     echo -e "
-  ${GREEN}Rclone 备份管理面板 (V9.0)${NC}
+  ${GREEN}Rclone 备份管理面板 (V10.0)${NC}
   状态: Rclone [${BLUE}${rclone_ver}${NC}] | 备份配置 [${config_status}] | 定时任务 [${cron_status}]
 
   --- ${YELLOW}首次使用请按顺序 1 -> 2 -> 3 操作${NC} ---
   1. 安装/更新 Rclone
-  2. 配置网盘 (终极版中文向导)
+  2. 配置网盘 (终极修正版中文向导)
   3. 配置备份任务
 
   --- ${YELLOW}日常核心操作${NC} ---
