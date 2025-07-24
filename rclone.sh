@@ -5,13 +5,7 @@
 #
 # 作者: Your Name/GitHub (基于用户反馈迭代)
 # 版本: 10.0
-# 更新日志:
-# v10.0: 根据用户的宝贵反馈，彻底重写并修正了 "配置网盘" 向导。
-#        详细加入了在个人电脑上创建“空壳”配置、获取 Token、
-#        以及在服务器上最后两步确认的完整流程。
-#        这应该是目前最详尽、最准确的远程授权中文指南。
-# v9.0:  重写向导，适配 `rclone authorize` 流程，但存在致命缺陷。
-# ==============================================================================
+=============================================================
 
 # --- 全局变量和美化输出 ---
 GREEN='\033[0;32m'
@@ -24,12 +18,37 @@ CONFIG_FILE="/etc/rclone_backup.conf"
 LOG_FILE="/var/log/rclone_backup.log"
 CRON_COMMENT_TAG="Rclone-Backup-Job-by-Panel-Script"
 SCRIPT_PATH=$(realpath "$0")
+WECHAT_PUSH_ENABLED="false"
+WECHAT_PUSH_TOKEN=""
 
 # --- 基础辅助函数 ---
 log_info() { echo -e "${GREEN}[信息] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}"; }
 log_warn() { echo -e "${YELLOW}[警告] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}"; }
 log_error() { echo -e "${RED}[错误] $(date +"%Y-%m-%d %H:%M:%S") $1${NC}"; }
 log_to_file() { echo "$(date +"%Y-%m-%d %H:%M:%S") $1" >> "$LOG_FILE"; }
+
+# --- 微信推送功能 ---
+send_wechat_notification() {
+    if [ "$WECHAT_PUSH_ENABLED" != "true" ] || [ -z "$WECHAT_PUSH_TOKEN" ]; then
+        return 0
+    fi
+    
+    local title="$1"
+    local content="$2"
+    
+    log_info "正在发送微信通知..."
+    local result=$(curl -s -X POST "https://sctapi.ftqq.com/${WECHAT_PUSH_TOKEN}.send" \
+        -d "title=${title}" \
+        -d "desp=${content}")
+    
+    if echo "$result" | grep -q "success"; then
+        log_info "微信通知发送成功"
+        log_to_file "[INFO] WeChat notification sent successfully"
+    else
+        log_error "微信通知发送失败: $result"
+        log_to_file "[ERROR] Failed to send WeChat notification: $result"
+    fi
+}
 
 press_any_key() { echo -e "\n${BLUE}按任意键返回主菜单...${NC}"; read -n 1 -s; }
 check_root() { if [ "$(id -u)" -ne 0 ]; then echo -e "${RED}[错误] 此脚本需要以 root 用户身份运行。${NC}"; exit 1; fi; }
@@ -82,6 +101,12 @@ run_backup_core() {
         else
             log_error "压缩失败！请检查源目录权限或磁盘空间。"
             log_to_file "[ERROR] Compression of '$LOCAL_PATH' failed."
+            
+            # 发送微信通知 - 压缩失败
+            if [ "$WECHAT_PUSH_ENABLED" == "true" ]; then
+                send_wechat_notification "Rclone备份失败" "压缩阶段失败，请检查源目录权限或磁盘空间。\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n源路径: $LOCAL_PATH"
+            fi
+            
             exit 1
         fi
     fi
@@ -94,11 +119,21 @@ run_backup_core() {
         local duration=$((end_time - start_time))
         log_info "$task_name 成功完成，耗时 ${duration} 秒。"
         log_to_file "[SUCCESS] $task_name completed successfully in ${duration} seconds."
+        
+        # 发送微信通知 - 备份成功
+        if [ "$WECHAT_PUSH_ENABLED" == "true" ]; then
+            send_wechat_notification "Rclone备份成功" "$task_name 成功完成\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n源路径: $LOCAL_PATH\n目标路径: $dest_path\n耗时: ${duration} 秒"
+        fi
     else
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         log_error "$task_name 失败，耗时 ${duration} 秒。详情请查看日志。"
         log_to_file "[ERROR] $task_name FAILED after ${duration} seconds."
+        
+        # 发送微信通知 - 备份失败
+        if [ "$WECHAT_PUSH_ENABLED" == "true" ]; then
+            send_wechat_notification "Rclone备份失败" "$task_name 失败\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n源路径: $LOCAL_PATH\n目标路径: $dest_path\n耗时: ${duration} 秒\n请检查日志获取详细信息。"
+        fi
     fi
 
     if $use_compression && [ -f "$source_path" ]; then
@@ -225,6 +260,28 @@ setup_backup_task() {
 
     read -p "请输入定时任务的Cron表达式 (例如 '0 3 * * *' 代表每天凌晨3点执行，留空则不设置): " CRON_SCHEDULE
     
+    # 添加微信推送配置
+    echo "是否启用微信推送通知? (使用Server酱推送服务)"
+    echo "  1. 是 - 备份结果将通过微信通知"
+    echo "  2. 否 - 不使用微信通知"
+    read -p "请选择 [1-2, 默认2]: " wechat_choice
+    
+    WECHAT_PUSH_ENABLED="false"
+    WECHAT_PUSH_TOKEN=""
+    
+    if [[ "$wechat_choice" == "1" ]]; then
+        WECHAT_PUSH_ENABLED="true"
+        echo "请前往 https://sct.ftqq.com 注册并获取 SCKEY (SendKey)"
+        read -p "请输入您的 SCKEY (SendKey): " WECHAT_PUSH_TOKEN
+        if [ -z "$WECHAT_PUSH_TOKEN" ]; then
+            log_warn "未提供有效的 SCKEY，微信推送将被禁用。"
+            WECHAT_PUSH_ENABLED="false"
+        else
+            log_info "正在测试微信推送..."
+            send_wechat_notification "Rclone备份测试" "如果您收到此消息，说明微信推送配置成功！"
+        fi
+    fi
+    
     RCLONE_GLOBAL_FLAGS="--log-file=\"$LOG_FILE\" --log-level=INFO --retries=3"
     
     log_info "正在将配置写入 $CONFIG_FILE ..."
@@ -246,6 +303,10 @@ BACKUP_MODE="$BACKUP_MODE"
 
 # 定时任务Cron表达式 (留空不启用)
 CRON_SCHEDULE="$CRON_SCHEDULE"
+
+# 微信推送配置
+WECHAT_PUSH_ENABLED="$WECHAT_PUSH_ENABLED"
+WECHAT_PUSH_TOKEN="$WECHAT_PUSH_TOKEN"
 
 # Rclone 全局参数
 RCLONE_GLOBAL_FLAGS="$RCLONE_GLOBAL_FLAGS"
@@ -309,7 +370,8 @@ view_current_config() {
     (
         echo -e "配置项\t值"
         echo -e "-------\t---"
-        grep -v '^#' "$CONFIG_FILE" | sed 's/=/ \t/' | sed 's/"//g'
+        grep -v '^#' "$CONFIG_FILE" | grep -v "WECHAT_PUSH_TOKEN" | sed 's/=/ \t/' | sed 's/"//g'
+        echo -e "WECHAT_PUSH_TOKEN\t$(if [ -n "$WECHAT_PUSH_TOKEN" ]; then echo "已设置 (已隐藏)"; else echo "未设置"; fi)"
     ) | column -t -s $'\t'
 }
 
@@ -377,11 +439,13 @@ show_menu() {
     [ -f "$CONFIG_FILE" ] && config_status="${GREEN}已配置${NC}"
     local cron_status="${RED}未启用${NC}"
     (crontab -l 2>/dev/null | grep -q "$CRON_COMMENT_TAG") && cron_status="${GREEN}已启用${NC}"
+    local wechat_status="${RED}未启用${NC}"
+    [ -f "$CONFIG_FILE" ] && grep -q 'WECHAT_PUSH_ENABLED="true"' "$CONFIG_FILE" && wechat_status="${GREEN}已启用${NC}"
     
     clear
     echo -e "
   ${GREEN}Rclone 备份管理面板 (V10.0)${NC}
-  状态: Rclone [${BLUE}${rclone_ver}${NC}] | 备份配置 [${config_status}] | 定时任务 [${cron_status}]
+  状态: Rclone [${BLUE}${rclone_ver}${NC}] | 备份配置 [${config_status}] | 定时任务 [${cron_status}] | 微信推送 [${wechat_status}]
 
   --- ${YELLOW}首次使用请按顺序 1 -> 2 -> 3 操作${NC} ---
   1. 安装/更新 Rclone
