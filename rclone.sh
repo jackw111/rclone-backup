@@ -5,7 +5,7 @@
 #
 # 作者: Your Name/GitHub (基于用户反馈迭代)
 # 版本: 10.0
-=============================================================
+# ==============================================================================
 
 # --- 全局变量和美化输出 ---
 GREEN='\033[0;32m'
@@ -41,7 +41,7 @@ send_wechat_notification() {
         -d "title=${title}" \
         -d "desp=${content}")
     
-    if echo "$result" | grep -q "success"; then
+    if echo "$result" | grep -q "\"error\":\"SUCCESS\""; then
         log_info "微信通知发送成功"
         log_to_file "[INFO] WeChat notification sent successfully"
     else
@@ -367,12 +367,29 @@ run_backup_dry_run() {
 view_current_config() {
     if ! check_config_exists; then return; fi
     echo -e "--- ${YELLOW}当前备份配置 ($CONFIG_FILE)${NC} ---"
-    (
-        echo -e "配置项\t值"
-        echo -e "-------\t---"
-        grep -v '^#' "$CONFIG_FILE" | grep -v "WECHAT_PUSH_TOKEN" | sed 's/=/ \t/' | sed 's/"//g'
-        echo -e "WECHAT_PUSH_TOKEN\t$(if [ -n "$WECHAT_PUSH_TOKEN" ]; then echo "已设置 (已隐藏)"; else echo "未设置"; fi)"
-    ) | column -t -s $'\t'
+    
+    # 不使用column命令的版本
+    echo -e "${GREEN}配置项\t\t值${NC}"
+    echo -e "${GREEN}-------\t\t---${NC}"
+    
+    while IFS='=' read -r key value; do
+        # 跳过注释行和空行
+        [[ "$key" =~ ^[[:space:]]*# ]] && continue
+        [[ -z "$key" ]] && continue
+        
+        # 处理WECHAT_PUSH_TOKEN特殊情况
+        if [[ "$key" == "WECHAT_PUSH_TOKEN" ]]; then
+            if [[ -n "$value" && "$value" != '""' ]]; then
+                echo -e "${key}\t已设置 (已隐藏)"
+            else
+                echo -e "${key}\t未设置"
+            fi
+        else
+            # 移除引号
+            value=${value//\"/}
+            echo -e "${key}\t${value}"
+        fi
+    done < "$CONFIG_FILE"
 }
 
 view_log() {
